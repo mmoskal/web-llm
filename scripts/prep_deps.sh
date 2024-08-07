@@ -19,6 +19,6 @@ cd ${TVM_SOURCE_DIR}/web && make && npm install && npm run build && cd -
 rm -rf tvm_home
 ln -s ${TVM_SOURCE_DIR} tvm_home
 npm install
-cd examples/simple-chat
+cd examples/simple-chat-js
 npm install
 cd ../..

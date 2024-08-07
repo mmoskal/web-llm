@@ -1,0 +1,12 @@
+diff --git a/web/emcc/wasm_runtime.cc b/web/emcc/wasm_runtime.cc
+index 2f7135595..12e82848b 100644
+--- a/web/emcc/wasm_runtime.cc
++++ b/web/emcc/wasm_runtime.cc
+@@ -120,6 +120,7 @@ TVM_REGISTER_GLOBAL("testing.log_fatal_str").set_body([](TVMArgs args, TVMRetVal
+ });
+ 
+ TVM_REGISTER_GLOBAL("testing.add_one").set_body_typed([](int x) { return x + 1; });
++TVM_REGISTER_GLOBAL("testing.exit_now").set_body_typed([]() { exit(0); });
+ 
+ TVM_REGISTER_GLOBAL("testing.wrap_callback").set_body([](TVMArgs args, TVMRetValue* ret) {
+   PackedFunc pf = args[0];
