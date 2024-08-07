@@ -823,7 +823,7 @@ export class LLMChatPipeline {
           new Uint8Array(
             logitBitmask.buffer,
             logitBitmask.byteOffset,
-            logitBitmask.byteLength,
+            Math.min(logitBitmask.byteLength, this.bitmaskSize * 4),
           ),
         );
       const seqIdsArray = this.tvm

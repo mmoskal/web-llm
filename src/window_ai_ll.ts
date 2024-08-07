@@ -18,7 +18,11 @@ export interface AISequenceOptions {
   messages: AIAssistantPrompt[];
 }
 
+const TOKENIZER_PREFIX = "\x02";
+
 export class AIModel {
+  private tokPrefix: Int32Array | undefined;
+
   constructor(public _engine: MLCEngine) {}
 
   async createSequence(options: AISequenceOptions): Promise<AISequence> {
@@ -53,11 +57,14 @@ export class AIModel {
       );
     }
 
+    const pref = tok.encode(TOKENIZER_PREFIX);
+    const tokPref = pref[pref.length - 1];
+
     const encodedTokenizer: number[] = [];
     const encoder = new TextEncoder();
     for (let i = 0; i < nVocab; i++) {
       //r.push(tok.idToToken(i));
-      const s = tok.decode(Int32Array.from([i]));
+      const s = tok.decode(Int32Array.from([tokPref, i])).slice(1);
       let bytes: Uint8Array;
       let isSpecial = false;
       if (s.includes("\uFFFD")) {
@@ -87,7 +94,20 @@ export class AIModel {
 
   // only encode the exact text
   tokenizeExact(text: string, options?: AITokenizationOptions): Int32Array {
-    return this._engine.pipeline!.tokenizer.encode(text)!;
+    const tok = this._engine.pipeline!.tokenizer;
+    if (this.tokPrefix === undefined) {
+      this.tokPrefix = tok.encode(TOKENIZER_PREFIX);
+    }
+
+    const r = tok.encode(TOKENIZER_PREFIX + text)!;
+
+    for (let i = 0; i < this.tokPrefix.length; i++) {
+      if (r[i] != this.tokPrefix[i]) {
+        throw new Error("Tokenizer prefix mismatch");
+      }
+    }
+
+    return r.slice(this.tokPrefix.length);
   }
 }
 
