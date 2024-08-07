@@ -49,3 +49,5 @@ export {
 } from "./extension_service_worker";
 
 export * from "./openai_api_protocols/index";
+
+export * from "./window_ai_ll";

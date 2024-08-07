@@ -26,10 +26,10 @@ import {
 
 export class LLMChatPipeline {
   private config: ChatConfig;
-  private tokenizer: Tokenizer;
+  tokenizer: Tokenizer;
 
   // TVM functions
-  private tvm: tvmjs.Instance;
+  tvm: tvmjs.Instance;
   private device: tvmjs.DLDevice;
   private vm: tvmjs.VirtualMachine;
   private prefill: tvmjs.PackedFunc;
@@ -49,7 +49,7 @@ export class LLMChatPipeline {
   private params: tvmjs.TVMObject;
   private kvCache: tvmjs.TVMObject;
   private logitsOnCPU?: tvmjs.NDArray = undefined;
-  private filledKVCacheLength = 0;
+  filledKVCacheLength = 0;
 
   // meta data
   private bosTokenId = 1;
@@ -59,12 +59,13 @@ export class LLMChatPipeline {
   private prefillChunkSize = -1;
   private resetStatsPerPrefill = true;
   private stopStr: string[];
-  private stopTokens: Array<number>;
+  stopTokens: Array<number>;
 
   // states
   private outputMessage = "";
   private outputIds: Array<number> = [];
   private stopTriggered = false;
+  lowLevel = false;
   private finishReason: ChatCompletionFinishReason | undefined = undefined;
   // frequency of appeared token ids till now (refresh after PrefillStep); token_id mapped to freq
   private appearedTokensFreq = new Map<number, number>();
@@ -443,7 +444,7 @@ export class LLMChatPipeline {
     msgRole: Role, // either user or tool
     inp_role_str?: string,
     genConfig?: GenerationConfig,
-  ): Promise<void> {
+  ): Promise<tvmjs.NDArray | undefined> {
     if (msgRole !== Role.user && msgRole !== Role.tool) {
       throw new MessageOrderError(
         "The last message should be from `user` or `tool`.",
@@ -525,8 +526,13 @@ export class LLMChatPipeline {
 
     this.tvm.endScope();
 
-    const nextToken = await this.sampleTokenFromLogits(logits, genConfig);
-    logits.dispose();
+    let nextToken = 0;
+
+    if (!this.lowLevel) {
+      nextToken = await this.sampleTokenFromLogits(logits, genConfig);
+      logits.dispose();
+    }
+
     const tend = performance.now();
 
     this.prefillTotalTime += (tend - tstart) / 1e3;
@@ -534,7 +540,11 @@ export class LLMChatPipeline {
     this.curRoundPrefillTotalTokens += promptTokens.length;
     this.curRoundPrefillTotalTime += (tend - tstart) / 1e3;
 
-    this.processNextToken(nextToken, genConfig);
+    if (this.lowLevel) {
+      return logits;
+    } else {
+      this.processNextToken(nextToken, genConfig);
+    }
   }
 
   async decodeStep(genConfig?: GenerationConfig): Promise<void> {
@@ -587,6 +597,10 @@ export class LLMChatPipeline {
     nextToken: number,
     genConfig?: GenerationConfig,
   ): void {
+    if (this.lowLevel) {
+      return;
+    }
+
     if (this.stopTriggered) {
       throw Error("Cannot call process when it is stoppped");
     }
@@ -696,9 +710,10 @@ export class LLMChatPipeline {
     return this.logitsOnCPU;
   }
 
-  private async sampleTokenFromLogits(
+  async sampleTokenFromLogits(
     logitsOnGPU: tvmjs.NDArray,
     genConfig?: GenerationConfig,
+    logitBitmask?: Uint32Array,
   ) {
     // 0. Get value of temperature, top_p, and various penalties, possibly overridden by genConfig
     // Also load other genConfig items like logit_bias. Consume all fields of `genConfig` here.
@@ -789,6 +804,28 @@ export class LLMChatPipeline {
       const bitMaskOnGPU = this.tvm
         .empty([1, this.bitmaskSize], "int32", this.device)
         .copyFrom(bitMaskOnCPU);
+      const seqIdsArray = this.tvm
+        .empty([1], "int32", this.device)
+        .copyFrom([0]);
+      this.fapplyBitmask(
+        logitsOnGPU.view([1, this.fullVocabSize]),
+        seqIdsArray,
+        bitMaskOnGPU,
+      );
+      this.tvm.endScope();
+    }
+
+    if (logitBitmask !== undefined) {
+      this.tvm.beginScope();
+      const bitMaskOnGPU = this.tvm
+        .empty([1, this.bitmaskSize], "int32", this.device)
+        .copyFromRawBytes(
+          new Uint8Array(
+            logitBitmask.buffer,
+            logitBitmask.byteOffset,
+            logitBitmask.byteLength,
+          ),
+        );
       const seqIdsArray = this.tvm
         .empty([1], "int32", this.device)
         .copyFrom([0]);
@@ -958,6 +995,28 @@ export class LLMChatPipeline {
       );
     }
     return tokens;
+  }
+
+  async forwardTokens(inputIds: Array<number>): Promise<tvmjs.NDArray> {
+    // 1. Convert input to NDArray
+    const tstart = performance.now();
+    this.tvm.beginScope();
+    const inputData = this.tvm.empty([inputIds.length], "int32", this.device);
+    inputData.copyFrom(inputIds);
+
+    // 2. Forward tokens and get logits
+    let logitsOnGPU: tvmjs.NDArray = this.forward(inputData);
+    logitsOnGPU = this.tvm.detachFromCurrentScope(logitsOnGPU);
+    this.tvm.endScope();
+
+    // 3. Stats
+    const tend = performance.now();
+    this.decodingTotalTime += (tend - tstart) / 1e3;
+    this.decodingTotalTokens += 1;
+    this.curRoundDecodingTotalTokens += 1;
+    this.curRoundDecodingTotalTime += (tend - tstart) / 1e3;
+
+    return logitsOnGPU;
   }
 
   async forwardTokensAndSample(

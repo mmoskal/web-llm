@@ -99,11 +99,11 @@ export class MLCEngine implements MLCEngineInterface {
   private logger: (msg: string) => void = log.info;
   private logitProcessorRegistry?: Map<string, LogitProcessor>;
   private logitProcessor?: LogitProcessor;
-  private pipeline?: LLMChatPipeline;
+  pipeline?: LLMChatPipeline;
   private initProgressCallback?: InitProgressCallback;
   private interruptSignal = false;
   private deviceLostIsError = true; // whether device.lost is due to actual error or model reload
-  private config?: ChatConfig;
+  config?: ChatConfig;
   private appConfig: AppConfig;
 
   constructor(engineConfig?: MLCEngineConfig) {
