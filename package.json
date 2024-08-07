@@ -1,5 +1,5 @@
 {
-  "name": "@mlc-ai/web-llm",
+  "name": "window-ai-ll-polyfill",
   "version": "0.2.53",
   "description": "Hardware accelerated language model chats on browsers",
   "main": "lib/index.js",
