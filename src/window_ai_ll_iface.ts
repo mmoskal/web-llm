@@ -21,6 +21,8 @@ export interface AITokenizationOptions {
 export interface AISequenceOptions {
   /**
    * Initial prompt of the sequence.
+   * The final `assistant` message will be added automatically and should not
+   * be included here.
    */
   messages: AIAssistantPrompt[];
 }
@@ -57,7 +59,7 @@ export interface AITokenizer {
   tokenName(tokenId: AITokenId): string;
 
   /**
-   * Tokenize (encode) the text without prepending the beginning-of-sequence of spaces,
+   * Tokenize (encode) the text without prepending the beginning-of-sequence or spaces,
    * or appending anything. This can used in the middle of a sequence.
    *
    * @param text the text to tokenize
