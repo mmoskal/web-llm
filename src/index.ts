@@ -50,4 +50,5 @@ export {
 
 export * from "./openai_api_protocols/index";
 
-export * from "./window_ai_ll";
+export { createAIModel } from "./window_ai_ll";
+export * from "./window_ai_ll_iface";

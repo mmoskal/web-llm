@@ -1,32 +1,27 @@
 import { MLCEngine } from "./engine";
 import * as tvmjs from "tvmjs";
-
-type MLCEngine2 = MLCEngine & { _window_ai_seq?: AISequence };
-
-export type AIAssistantPromptRole = "system" | "user" | "assistant";
-
-export interface AIAssistantPrompt {
-  role: AIAssistantPromptRole;
-  content: string;
-}
-
-export interface AITokenizationOptions {
-  allowSpecial?: boolean;
-}
-
-export interface AISequenceOptions {
-  messages: AIAssistantPrompt[];
-}
+import {
+  AISequenceOptions,
+  AISequence,
+  AIModel,
+  AITokenId,
+  AITokenizationOptions,
+} from "./window_ai_ll_iface";
 
 const TOKENIZER_PREFIX = "\x02";
 
-export class AIModel {
+export function createAIModel(engine: MLCEngine): AIModel {
+  return new MlcAIModel(engine);
+}
+
+class MlcAIModel implements AIModel {
   private tokPrefix: Int32Array | undefined;
+  private tokPrefix0 = 0;
 
   constructor(public _engine: MLCEngine) {}
 
   async createSequence(options: AISequenceOptions): Promise<AISequence> {
-    return new AISequence(this._engine, options);
+    return new MlcAiSequence(this._engine, options);
   }
 
   get maxTokens(): number {
@@ -41,56 +36,58 @@ export class AIModel {
     return this._engine.pipeline!.stopTokens[0];
   }
 
-  // binary format description for all tokens in the tokenizer
-  async tokenInfo(): Promise<Uint8Array> {
-    const tok = this._engine.pipeline!.tokenizer;
-
-    const nVocab = tok.getVocabSize();
-
-    function isSpecialToken(s: string) {
-      return (
-        s == "<s>" ||
-        s == "</s>" ||
-        s == "<pad>" ||
-        s == "<unk>" ||
-        (s.startsWith("<|") && s.endsWith("|>"))
-      );
+  private getTokPrefix() {
+    if (!this.tokPrefix) {
+      this.tokPrefix =
+        this._engine.pipeline!.tokenizer.encode(TOKENIZER_PREFIX);
+      this.tokPrefix0 = this.tokPrefix[this.tokPrefix.length - 1];
     }
-
-    const pref = tok.encode(TOKENIZER_PREFIX);
-    const tokPref = pref[pref.length - 1];
-
-    const encodedTokenizer: number[] = [];
-    const encoder = new TextEncoder();
-    for (let i = 0; i < nVocab; i++) {
-      //r.push(tok.idToToken(i));
-      const s = tok.decode(Int32Array.from([tokPref, i])).slice(1);
-      let bytes: Uint8Array;
-      let isSpecial = false;
-      if (s.includes("\uFFFD")) {
-        const id = tok.idToToken(i);
-        if (id.startsWith("<0x")) {
-          bytes = new Uint8Array([parseInt(id.slice(3), 16)]);
-        } else if (id == s) {
-          bytes = encoder.encode(s);
-        } else {
-          throw new Error(`Invalid token: ${JSON.stringify(s)} ${id} at ${i}`);
-        }
-      } else {
-        bytes = encoder.encode(s);
-        isSpecial = isSpecialToken(s);
-      }
-      if (bytes.length > 0xff) {
-        throw new Error(`Token too long: ${JSON.stringify(s)} at ${i}`);
-      }
-      encodedTokenizer.push(isSpecial ? 0x40 : 0, bytes.length, ...bytes);
-    }
-    return new Uint8Array(encodedTokenizer);
+    return this.tokPrefix;
   }
 
-  //   getTokenizer(): Tokenizer {
-  //     return this._engine.pipeline!.tokenizer;
-  //   }
+  tokenBytes(tokenId: AITokenId): Uint8Array {
+    const tok = this._engine.pipeline!.tokenizer;
+
+    this.getTokPrefix(); // compute tokPrefix0
+    const s = tok.decode(Int32Array.from([this.tokPrefix0, tokenId])).slice(1);
+
+    const isSpecial =
+      s == "<s>" ||
+      s == "</s>" ||
+      s == "<pad>" ||
+      s == "<unk>" ||
+      (s.startsWith("<|") && s.endsWith("|>"));
+
+    if (isSpecial) {
+      return new Uint8Array();
+    }
+
+    const encoder = new TextEncoder();
+
+    if (s.includes("\uFFFD")) {
+      const id = tok.idToToken(tokenId);
+      if (id.startsWith("<0x")) {
+        return new Uint8Array([parseInt(id.slice(3), 16)]);
+      } else if (id == s) {
+        return encoder.encode(s);
+      } else {
+        throw new Error(
+          `Invalid token: ${JSON.stringify(s)} ${id} at ${tokenId}`,
+        );
+      }
+    } else {
+      return encoder.encode(s);
+    }
+  }
+
+  tokenName(tokenId: AITokenId): string {
+    const tok = this._engine.pipeline!.tokenizer;
+    const r = tok.idToToken(tokenId);
+    if (r == "" && (tokenId < 0 || tokenId >= this.vocabSize)) {
+      throw new Error(`Invalid token id: ${tok}`);
+    }
+    return r;
+  }
 
   // only encode the exact text
   tokenizeExact(text: string, options?: AITokenizationOptions): Int32Array {
@@ -111,7 +108,7 @@ export class AIModel {
   }
 }
 
-export class AISequence {
+class MlcAiSequence implements AISequence {
   private _tokens: number[];
   private _promptSize = 0;
   private _logits: tvmjs.NDArray | undefined;
@@ -121,6 +118,12 @@ export class AISequence {
     private _options: AISequenceOptions,
   ) {
     this._tokens = [];
+  }
+
+  get promptSize(): number {
+    if (this._promptSize == 0)
+      throw new Error("Prompt size not initialized yet");
+    return this._promptSize;
   }
 
   get maxTokens(): number {
@@ -277,3 +280,5 @@ export interface AISamplingOptions {
 function isAllowed(mask: Uint32Array, i: number): boolean {
   return mask[i >>> 5] & (1 << (i & 31)) ? true : false;
 }
+
+type MLCEngine2 = MLCEngine & { _window_ai_seq?: MlcAiSequence };
